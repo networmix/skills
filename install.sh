@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Skills Install Script
 # Symlinks skills from this repo into ~/.claude/skills/
@@ -10,6 +10,8 @@
 #   ./install.sh skill1 ...   # Install specific skills
 #   ./install.sh --uninstall skill1  # Remove a skill
 #   ./install.sh --uninstall-all     # Remove all skills from this repo
+#
+# Note: Compatible with bash 3.2+ (macOS default)
 #
 
 set -euo pipefail
@@ -318,49 +320,49 @@ cmd_interactive() {
         exit 0
     fi
     
-    # Track selected state (1=selected, 0=not selected)
-    declare -A selected
-    for skill in "${skills[@]}"; do
-        if is_installed "$skill"; then
-            selected[$skill]=1
+    # Track selected state using indexed arrays (bash 3.2 compatible)
+    # Index corresponds to position in skills array
+    local selected=()
+    local original=()
+    local i
+    for i in "${!skills[@]}"; do
+        if is_installed "${skills[$i]}"; then
+            selected[$i]=1
+            original[$i]=1
         else
-            selected[$skill]=0
+            selected[$i]=0
+            original[$i]=0
         fi
-    done
-    
-    # Track original state for comparison
-    declare -A original
-    for skill in "${skills[@]}"; do
-        original[$skill]=${selected[$skill]}
     done
     
     while true; do
         echo ""
         echo -e "${BOLD}Skills:${NC}"
-        local i=1
-        for skill in "${skills[@]}"; do
+        local num=1
+        for i in "${!skills[@]}"; do
+            local skill="${skills[$i]}"
             local status=""
             local marker=""
             
-            if [[ ${selected[$skill]} -eq 1 ]]; then
+            if [[ ${selected[$i]} -eq 1 ]]; then
                 marker="${GREEN}[x]${NC}"
             else
                 marker="[ ]"
             fi
             
             # Show what will change
-            if [[ ${selected[$skill]} -ne ${original[$skill]} ]]; then
-                if [[ ${selected[$skill]} -eq 1 ]]; then
+            if [[ ${selected[$i]} -ne ${original[$i]} ]]; then
+                if [[ ${selected[$i]} -eq 1 ]]; then
                     status="${GREEN}(will install)${NC}"
                 else
                     status="${RED}(will remove)${NC}"
                 fi
-            elif [[ ${selected[$skill]} -eq 1 ]]; then
+            elif [[ ${selected[$i]} -eq 1 ]]; then
                 status="${CYAN}(installed)${NC}"
             fi
             
-            echo -e "  $i) $marker $skill $status"
-            i=$((i + 1))
+            echo -e "  $num) $marker $skill $status"
+            num=$((num + 1))
         done
         
         echo ""
@@ -376,23 +378,22 @@ cmd_interactive() {
                 exit 0
                 ;;
             a|A)
-                for skill in "${skills[@]}"; do
-                    selected[$skill]=1
+                for i in "${!skills[@]}"; do
+                    selected[$i]=1
                 done
                 ;;
             n|N)
-                for skill in "${skills[@]}"; do
-                    selected[$skill]=0
+                for i in "${!skills[@]}"; do
+                    selected[$i]=0
                 done
                 ;;
             [0-9]*)
                 local idx=$((input - 1))
                 if [[ $idx -ge 0 && $idx -lt ${#skills[@]} ]]; then
-                    local skill="${skills[$idx]}"
-                    if [[ ${selected[$skill]} -eq 1 ]]; then
-                        selected[$skill]=0
+                    if [[ ${selected[$idx]} -eq 1 ]]; then
+                        selected[$idx]=0
                     else
-                        selected[$skill]=1
+                        selected[$idx]=1
                     fi
                 else
                     log_warning "Invalid number: $input"
@@ -409,12 +410,12 @@ cmd_interactive() {
     log_header "Applying changes"
     
     local changes=0
-    for skill in "${skills[@]}"; do
-        if [[ ${selected[$skill]} -ne ${original[$skill]} ]]; then
-            if [[ ${selected[$skill]} -eq 1 ]]; then
-                install_skill "$skill" "false"
+    for i in "${!skills[@]}"; do
+        if [[ ${selected[$i]} -ne ${original[$i]} ]]; then
+            if [[ ${selected[$i]} -eq 1 ]]; then
+                install_skill "${skills[$i]}" "false"
             else
-                uninstall_skill "$skill"
+                uninstall_skill "${skills[$i]}"
             fi
             changes=$((changes + 1))
         fi
