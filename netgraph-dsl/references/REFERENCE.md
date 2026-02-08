@@ -1248,7 +1248,6 @@ Baseline (no failures) is always run first as a reference. The `iterations` para
   resolution: 0.01           # Convergence resolution
   max_bracket_iters: 32
   max_bisect_iters: 32
-  seeds_per_alpha: 1         # Seeds per alpha (majority vote)
   placement_rounds: auto
 ```
 
