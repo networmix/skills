@@ -292,17 +292,45 @@ demands:
 ```yaml
 failures:
   single_link:
-    expand_groups: false         # Expand to shared-risk entities
     modes:                       # Weighted modes (one selected per iteration)
       - weight: 1.0
         rules:
           - scope: link          # Required: node, link, or risk_group
             mode: choice         # all, choice, or random
             count: 1
-            # Optional: weight_by: capacity  # Weighted sampling by attribute
+
+  # Target specific nodes by attribute
+  single_bb_node:
+    modes:
+      - weight: 1.0
+        rules:
+          - scope: node
+            mode: choice
+            count: 1
+            match:
+              conditions:
+                - attr: role
+                  op: "=="
+                  value: bb
+
+  # Target risk groups by type
+  lh_path_failure:
+    modes:
+      - weight: 1.0
+        rules:
+          - scope: risk_group
+            mode: choice
+            count: 1
+            match:
+              conditions:
+                - attr: type
+                  op: "=="
+                  value: long_haul_path
 ```
 
 **Rule modes**: `all` (select all matches), `choice` (sample `count`), `random` (each with `probability`)
+
+**Target by node attrs**: Set `attrs: {role: bb}` on nodes, then use `scope: node` with `match.conditions` to target them.
 
 ### Risk Groups
 
@@ -357,20 +385,26 @@ workflow:
     demand_set: production
     alpha_start: 1.0
     resolution: 0.05
+    placement_rounds: auto
   - type: TrafficMatrixPlacement
     name: placement
     demand_set: production
-    failure_policy: single_link
-    iterations: 1000
-    alpha_from_step: msd          # Reference MSD result
+    failure_policy: single_link   # References a failure policy name
+    iterations: 1000              # Monte Carlo failure iterations
+    parallelism: auto             # Worker threads (default: auto)
+    placement_rounds: auto        # TE rerouting rounds (default: auto)
+    seed: 42                      # Optional: for reproducibility
+    include_flow_details: true    # Optional: include cost_distribution per flow
+    alpha_from_step: msd          # Scale demand by MSD alpha_star
     alpha_from_field: data.alpha_star
   - type: MaxFlow
+    name: capacity_matrix
     source: "^(dc[1-3])$"
     target: "^(dc[1-3])$"
     mode: pairwise
     failure_policy: single_link
     iterations: 1000
-    seed: 42                      # Optional: for reproducibility
+    seed: 42
 ```
 
 **Step types**: `BuildGraph`, `NetworkStats`, `MaxFlow`, `TrafficMatrixPlacement`, `MaximumSupportedDemand`, `CostPower`
