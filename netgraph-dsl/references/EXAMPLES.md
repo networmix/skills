@@ -1,13 +1,14 @@
-# NetGraph DSL Examples
+# NetGraph Scenario Examples
 
-Complete working examples for common use cases.
+Complete scenarios, from small to larger. Each one loads as written; the **Result** line says
+what it builds.
 
-> For quick patterns and pitfalls, see the main [SKILL.md](../SKILL.md).
-> For detailed field reference, see [REFERENCE.md](REFERENCE.md).
+> For the rules and common mistakes, see [SKILL.md](../SKILL.md).
+> For every key, see [REFERENCE.md](REFERENCE.md).
 
-## Example 1: Simple Data Center
+## Example 1: Leaf-spine fabric with a traffic matrix
 
-A basic leaf-spine topology with traffic analysis.
+Four leaves, two spines, traffic between every pair of leaves, one link failure per draw.
 
 ```yaml
 network:
@@ -31,8 +32,8 @@ network:
 
 demands:
   default:
-    - source: "^leaf/.*"
-      target: "^leaf/.*"
+    - source: "^(leaf/leaf[0-9]+)$"   # one group per leaf, so a leaf never sends to itself
+      target: "^(leaf/leaf[0-9]+)$"
       volume: 50
       mode: pairwise
 
@@ -53,11 +54,13 @@ workflow:
     iterations: 100
 ```
 
-**Result**: 6 nodes (4 leaf + 2 spine), 8 links (4x2 mesh)
+**Result**: 6 nodes (`leaf/leaf1` to `leaf/leaf4`, `spine/spine1`, `spine/spine2`) and 8 links.
+The 12 ordered pairs of distinct leaves share the declared volume of 50.
 
-## Example 2: Multi-Pod with Blueprint
+## Example 2: Two pods from one blueprint
 
-Two pods sharing a blueprint, connected via spine layer.
+A blueprint is a reusable piece of topology. Here it is used twice, and the two pods are joined
+at their spines.
 
 ```yaml
 blueprints:
@@ -98,11 +101,13 @@ network:
       capacity: 400
 ```
 
-**Result**: 12 nodes (2 pods x 6 nodes), 20 links (16 internal + 4 inter-pod)
+**Result**: 12 nodes (6 per pod, for example `pod1/leaf/leaf1`) and 20 links: 8 inside each pod
+and 4 between the pods' spines.
 
-## Example 3: Backbone with Risk Groups
+## Example 3: Backbone with shared-risk link groups
 
-Wide-area network with shared-risk link groups.
+A risk group is a set of nodes and links that fail together, such as the fibers in one conduit.
+The capacity step asks how much New York can send to Los Angeles when one risk group fails.
 
 ```yaml
 network:
@@ -112,7 +117,7 @@ network:
     LosAngeles: {attrs: {site_type: core}}
 
   links:
-    # Parallel diverse paths
+    # Two parallel New York-Chicago links; only the first is in the corridor group
     - source: NewYork
       target: Chicago
       capacity: 100
@@ -122,7 +127,6 @@ network:
       target: Chicago
       capacity: 100
       cost: 10
-    # Single path
     - source: Chicago
       target: LosAngeles
       capacity: 100
@@ -147,13 +151,24 @@ failures:
           - scope: risk_group
             mode: choice
             count: 1
+
+workflow:
+  - type: MaxFlow
+    name: ny_to_la
+    source: "^NewYork$"
+    target: "^LosAngeles$"
+    failure_policy: srlg_failure
+    iterations: 10
+    seed: 1
 ```
 
-**Result**: 3 nodes, 3 links, 2 risk groups
+**Result**: 3 nodes, 3 links (`NewYork|Chicago|0`, `NewYork|Chicago|1`, `Chicago|LosAngeles|0`)
+and 2 risk groups. Without failures 100 can flow; losing `RG_NY_CHI` still leaves 100, losing
+`RG_CHI_LA` leaves 0.
 
-## Example 4: Variable Expansion at Scale
+## Example 4: Variable expansion at scale
 
-Large fabric using variable expansion.
+An `expand` block repeats one link definition for every combination of its variables.
 
 ```yaml
 network:
@@ -183,11 +198,13 @@ network:
       capacity: 100
 ```
 
-**Result**: 1540 nodes (4x8x48 compute + 4 spine), 6144 links
+**Result**: 1,540 nodes (4 × 8 × 48 servers and 4 spines, such as `fabric/spine1/spine`) and
+6,144 links: 128 combinations, each joining 48 servers to one spine.
 
-## Example 5: Full Mesh Topology
+## Example 5: Four-node full mesh
 
-Simple 4-node full mesh for testing.
+The largest scale of a traffic matrix that fits, and the capacity between every pair of nodes
+under single link failures.
 
 ```yaml
 seed: 42
@@ -203,27 +220,27 @@ network:
     - source: N1
       target: N2
       capacity: 2.0
-      cost: 1.0
+      cost: 1
     - source: N1
       target: N3
       capacity: 1.0
-      cost: 1.0
+      cost: 1
     - source: N1
       target: N4
       capacity: 2.0
-      cost: 1.0
+      cost: 1
     - source: N2
       target: N3
       capacity: 2.0
-      cost: 1.0
+      cost: 1
     - source: N2
       target: N4
       capacity: 1.0
-      cost: 1.0
+      cost: 1
     - source: N3
       target: N4
       capacity: 2.0
-      cost: 1.0
+      cost: 1
 
 failures:
   single_link_failure:
@@ -245,9 +262,8 @@ workflow:
   - type: MaximumSupportedDemand
     name: msd
     demand_set: baseline
-    acceptance_rule: hard
     alpha_start: 1.0
-    resolution: 0.05
+    alpha_tolerance: 0.05
 
   - type: MaxFlow
     name: capacity_matrix
@@ -259,9 +275,13 @@ workflow:
     seed: 42
 ```
 
-## Example 6: Attribute-Based Selectors
+**Result**: 4 nodes and 6 links. The 12 ordered pairs of distinct nodes share the volume of 12,
+1 each; the capacity step reports one row per ordered pair in each failure case.
 
-Using match conditions to filter nodes.
+## Example 6: Selecting nodes by attribute
+
+A selector's `path` is matched from the start of the name, so `/servers` also matches
+`servers_b/...`. The `match` conditions keep only the rack-1 servers.
 
 ```yaml
 network:
@@ -308,11 +328,12 @@ network:
       cost: 1
 ```
 
-**Result**: 8 nodes, 8 links (only rack-1 servers connect to switches)
+**Result**: 8 nodes and 8 links: each of the four `servers/srv*` nodes to both switches. The
+`servers_b` nodes get no links.
 
-## Example 7: Blueprint with Parameter Overrides
+## Example 7: Overriding blueprint parameters
 
-Customizing blueprint instances.
+`params` changes one instance of a blueprint, here a nested attribute.
 
 ```yaml
 blueprints:
@@ -332,11 +353,12 @@ network:
         leaf.attrs.some_field.nested_key: 999
 ```
 
-**Result**: Node `Main/leaf/leaf1` has `attrs.some_field.nested_key = 999`
+**Result**: one node, `Main/leaf/leaf-1` (without a `template`, names are `<group>-{n}`), with
+`attrs.some_field.nested_key` 999.
 
-## Example 8: Node and Link Rules
+## Example 8: Node and link rules
 
-Modifying topology after creation.
+Rules change nodes and links after they are created.
 
 ```yaml
 blueprints:
@@ -378,11 +400,13 @@ network:
       cost: 5
 ```
 
-**Result**: Switches 1 and 3 disabled, specific link upgraded to 200 capacity
+**Result**: 7 nodes and 4 links. `my_clos1/switches/switch1` and `switch3` are disabled; the link
+`group1/node1|group2/node1|0` has capacity 200 and cost 5.
 
-## Example 9: Complete Traffic Analysis
+## Example 9: Supported demand, then placement under failures
 
-Full workflow with MSD and placement analysis.
+The MSD step (maximum supported demand) finds the largest multiplier of the demand set that
+still fits; the placement step then places the set at that multiplier under link failures.
 
 ```yaml
 seed: 42
@@ -414,14 +438,19 @@ network:
       attrs:
         metro_name: new-york
         node_type: pop
+  links:
+    - source: metro1/pop1/spine
+      target: metro1/pop2/spine
+      pattern: mesh
+      capacity: 3200
+      cost: 10
 
 demands:
   baseline:
-    - source: "^metro1/pop1/.*"
-      target: "^metro1/pop2/.*"
+    - source: "^metro1/pop1/leaf/"
+      target: "^metro1/pop2/leaf/"
       volume: 15000.0
       mode: pairwise
-      flow_policy: TE_WCMP_UNLIM
 
 failures:
   single_link:
@@ -439,26 +468,26 @@ workflow:
   - type: MaximumSupportedDemand
     name: msd_baseline
     demand_set: baseline
-    acceptance_rule: hard
     alpha_start: 1.0
     growth_factor: 2.0
-    resolution: 0.05
+    alpha_tolerance: 0.05
 
   - type: TrafficMatrixPlacement
     name: tm_placement
-    seed: 42
     demand_set: baseline
     failure_policy: single_link
-    iterations: 1000
-    parallelism: 7
-    include_flow_details: true
+    iterations: 200
+    outputs: {cost_distribution: true}
     alpha_from_step: msd_baseline
-    alpha_from_field: data.alpha_star
 ```
 
-## Example 10: Group-By Selectors
+**Result**: 40 nodes and 144 links: 64 inside each pop and 16 between the pops' spines. The
+256 leaf pairs share 15,000. The placement runs at the multiplier the MSD step found.
 
-Grouping nodes by attribute for demand generation.
+## Example 10: Grouping nodes by attribute
+
+`group_by` makes one group per value of an attribute. With `group_mode: group_pairwise`, traffic
+goes only between groups with different values: here from dc1 to dc2 and from dc2 to dc1.
 
 ```yaml
 network:
@@ -468,11 +497,9 @@ network:
     dc2_srv1: {attrs: {dc: dc2, role: server}}
     dc2_srv2: {attrs: {dc: dc2, role: server}}
   links:
-    - source: dc1_srv1
-      target: dc2_srv1
-      capacity: 100
-    - source: dc1_srv2
-      target: dc2_srv2
+    - source: "^dc1_"
+      target: "^dc2_"
+      pattern: mesh
       capacity: 100
 
 demands:
@@ -483,13 +510,20 @@ demands:
         group_by: dc
       volume: 100
       mode: pairwise
+      group_mode: group_pairwise
+
+workflow:
+  - type: TrafficMatrixPlacement
+    name: inter_dc
+    demand_set: inter_dc
 ```
 
-**Result**: Traffic flows grouped by datacenter attribute
+**Result**: 8 demands, one per server pair between different data centers. The volume of 100 is
+split between the two group pairs, then over their four server pairs.
 
-## Example 11: Advanced Failure Policies
+## Example 11: A failure policy with several modes
 
-Multiple weighted failure modes with conditions and weighted sampling.
+Each draw picks one mode by weight, then applies that mode's rules.
 
 ```yaml
 network:
@@ -527,10 +561,9 @@ risk_groups:
 
 failures:
   mixed_failures:
-    expand_groups: true          # Expand to shared-risk entities
-    expand_children: false
+    expand_groups: true          # also fail whatever shares a risk group with a failed element
     modes:
-      # 40% chance: fail 1 edge node weighted by capacity
+      # 40% of draws: one edge node, chosen with chance proportional to capacity_gbps
       - weight: 0.4
         attrs: {scenario: edge_failure}
         rules:
@@ -545,7 +578,7 @@ failures:
                   value: edge
             weight_by: capacity_gbps
 
-      # 35% chance: fail 1 risk group weighted by distance
+      # 35%: one risk group, chosen with chance proportional to distance_km
       - weight: 0.35
         attrs: {scenario: srlg_failure}
         rules:
@@ -554,7 +587,7 @@ failures:
             count: 1
             weight_by: distance_km
 
-      # 15% chance: fail all west-region nodes
+      # 15%: every west-region node
       - weight: 0.15
         attrs: {scenario: regional_outage}
         rules:
@@ -566,7 +599,7 @@ failures:
                   op: "=="
                   value: west
 
-      # 10% chance: random link failures (5% each)
+      # 10%: each link fails on its own with chance 5%
       - weight: 0.1
         attrs: {scenario: random_link}
         rules:
@@ -585,11 +618,12 @@ workflow:
     seed: 42
 ```
 
-**Result**: 5 nodes, 4 links, 3 risk groups, failure policy with 4 weighted modes
+**Result**: 5 nodes, 4 links, 3 risk groups and a policy with 4 weighted modes.
 
-## Example 12: Hardware Components and Cost Analysis
+## Example 12: Hardware cost and power
 
-Using the components library for cost/power modeling.
+The `components` library describes hardware; nodes and link ends name it under `attrs.hardware`.
+The `CostPower` step adds up hardware purchase cost and power use.
 
 ```yaml
 components:
@@ -653,7 +687,7 @@ network:
           target:
             component: Optic400G
             count: 2
-            exclusive: true          # Dedicated optics (rounds up count)
+            exclusive: true          # not shared with other links
 
 workflow:
   - type: NetworkStats
@@ -662,14 +696,15 @@ workflow:
   - type: CostPower
     name: cost_analysis
     include_disabled: false
-    aggregation_level: 1               # Aggregate by top-level group
+    aggregation_level: 1             # group by the first part of each name (leaf, spine)
 ```
 
-**Result**: 6 nodes, 16 links (4x2x2), component-based cost/power analysis
+**Result**: 6 nodes and 16 links (4 leaves × 2 spines × 2 parallel links), with capex and power
+per level.
 
-## Example 13: YAML Anchors for Reuse
+## Example 13: YAML anchors
 
-Using `vars` section for DRY configuration.
+YAML anchors (`&name`) and aliases (`*name`) reuse values; `<<:` merges a mapping.
 
 ```yaml
 vars:
@@ -689,7 +724,7 @@ network:
       count: 2
       template: "spine{n}"
       attrs:
-        <<: *spine_attrs             # Merge anchor
+        <<: *spine_attrs
         region: east
 
     leaf:
@@ -703,21 +738,23 @@ network:
     - source: /leaf
       target: /spine
       pattern: mesh
-      <<: *link_cfg                # Reuse link config
+      <<: *link_cfg
       attrs:
         link_type: fabric
 ```
 
-**Result**: Anchors resolved during YAML parsing; cleaner, less repetitive config
+**Result**: 6 nodes and 8 links of capacity 100 and cost 1. The anchors are resolved when the
+YAML is read.
 
-## Example 14: One-to-One Pattern and Zip Expansion
+## Example 14: one_to_one links and zip expansion
 
-Demonstrating pairwise connectivity patterns.
+`one_to_one` pairs the nodes of two sets in order, wrapping around the smaller set. `zip` pairs
+the values of the `expand` variables by position.
 
 ```yaml
 network:
   nodes:
-    # 4 servers, 2 switches - compatible for one_to_one (4 is multiple of 2)
+    # 4 servers and 2 switches: 4 is a multiple of 2, so one_to_one works
     server[1-4]:
       count: 1
       template: "srv"
@@ -726,30 +763,29 @@ network:
       template: "sw"
 
   links:
-    # one_to_one: server1->switch1, server2->switch2, server3->switch1, server4->switch2
+    # server1-switch1, server2-switch2, server3-switch1, server4-switch2
     - source: /server
       target: /switch
       pattern: one_to_one
       capacity: 100
 
-    # zip expansion: pairs variables by index (equal-length lists required)
+    # zip: server1-switch1 and server2-switch2
     - source: "server${idx}"
       target: "switch${sw}"
       expand:
         vars:
           idx: [1, 2]
           sw: [1, 2]
-        mode: zip            # server1->switch1, server2->switch2
+        mode: zip
       pattern: one_to_one
       capacity: 50
       cost: 2
 ```
 
-**Result**: Demonstrates one_to_one modulo wrap and zip expansion mode
+**Result**: 6 nodes (`server1/srv` and so on) and 6 links: four of capacity 100, and a second,
+parallel link of capacity 50 on `server1/srv|switch1/sw` and `server2/srv|switch2/sw`.
 
-## Example 15: Traffic Demands with Variable Expansion and Group Modes
-
-Advanced demand configuration.
+## Example 15: Demands from variables, groups and priorities
 
 ```yaml
 network:
@@ -765,35 +801,48 @@ network:
     - {source: dc2_leaf1, target: dc3_leaf1, capacity: 100}
 
 demands:
-  # Variable expansion in demands
+  # One demand per zip pair: dc1 to dc2, dc2 to dc3
   inter_dc:
-    - source: "^${src}/.*"
-      target: "^${dst}/.*"
+    - source: "^${src}_"
+      target: "^${dst}_"
       volume: 50
       expand:
         vars:
           src: [dc1, dc2]
           dst: [dc2, dc3]
-        mode: zip            # dc1->dc2, dc2->dc3
+        mode: zip
 
-  # Group modes with group_by
-  grouped:
+  # One demand per source group (dc1, dc2), each to dc3; placed before priority 1
+  to_dc3:
     - source:
+        path: "^dc[12]_"
         group_by: dc
-      target:
-        group_by: dc
+      target: "^dc3_"
       volume: 100
-      mode: pairwise
-      group_mode: per_group          # Separate demand per group pair
+      group_mode: per_group
+      priority: 0
+      preset: SHORTEST_PATHS_WCMP
+    - source: "^dc1_"
+      target: "^dc2_"
+      volume: 10
       priority: 1
-      flow_policy: SHORTEST_PATHS_WCMP
+
+workflow:
+  - type: TrafficMatrixPlacement
+    name: inter_dc
+    demand_set: inter_dc
+  - type: TrafficMatrixPlacement
+    name: to_dc3
+    demand_set: to_dc3
 ```
 
-**Result**: Shows variable expansion in demands, group_mode, and priority
+**Result**: `inter_dc` has two demands of 50 each (every `expand` combination has the whole
+volume). `to_dc3` has a demand from dc1 and one from dc2 to dc3, sharing 100, then a dc1 to dc2
+demand of 10.
 
-## Example 16: Hierarchical Risk Groups
+## Example 16: Nested risk groups
 
-Nested risk group structure with children.
+A child risk group fails with its parent.
 
 ```yaml
 network:
@@ -808,21 +857,24 @@ network:
     - {source: rack1_srv3, target: rack2_srv1, capacity: 100}
 
 risk_groups:
+  # Each card and rack declared at top level, with its attributes
+  - name: Rack1_Card1
+    attrs: {slot: 1, parent: Rack1}
+  - name: Rack1_Card2
+    attrs: {slot: 2, parent: Rack1}
+  - name: Rack2
+    disabled: false
+    attrs: {location: "DC1-Row2"}
+  # The parent names the cards as its children
   - name: Rack1
     attrs: {location: "DC1-Row1"}
     children:
       - name: Rack1_Card1
-        attrs: {slot: 1}
       - name: Rack1_Card2
-        attrs: {slot: 2}
-  - name: Rack2
-    disabled: false
-    attrs: {location: "DC1-Row2"}
 
 failures:
   hierarchical:
     expand_groups: true
-    expand_children: true   # Failing Rack1 also fails Card1, Card2
     modes:
       - weight: 1.0
         rules:
@@ -832,15 +884,16 @@ failures:
             match:
               conditions:
                 - attr: location
-                  op: contains    # String contains
+                  op: contains
                   value: "DC1"
 ```
 
-**Result**: Hierarchical risk groups with recursive child failure expansion
+**Result**: 4 risk groups. The failure rule chooses between `Rack1` and `Rack2` (the groups with
+a `location`). Failing `Rack1` fails its cards too, and with them the three `rack1_*` servers.
 
-## Example 17: Risk Group Membership Rules
+## Example 17: Risk group membership rules
 
-Dynamically assign entities based on attributes.
+A membership rule puts every node or link whose attributes match into the group.
 
 ```yaml
 network:
@@ -854,19 +907,19 @@ network:
       target: core2
       capacity: 1000
       attrs:
-        route_type: backbone
-        path_id: primary
+        route:
+          type: backbone
     - source: core1
       target: edge1
       capacity: 400
 
 risk_groups:
-  # Assign all core tier-3 nodes
+  # Every node with role core and tier 3
   - name: CoreTier3
     membership:
       scope: node
       match:
-        logic: and              # Must match ALL conditions
+        logic: and              # every condition must hold (the default for membership)
         conditions:
           - attr: role
             op: "=="
@@ -875,26 +928,26 @@ risk_groups:
             op: "=="
             value: 3
 
-  # Assign links by route type
+  # Links by a nested attribute, written with a dot
   - name: BackboneLinks
     membership:
       scope: link
       match:
-        logic: and
         conditions:
-          - attr: route_type      # Dot-notation for nested attrs
+          - attr: route.type
             op: "=="
             value: backbone
 
-  # String shorthand for simple groups
+  # A plain name defines a group with no rule
   - "ManualGroup1"
 ```
 
-**Result**: Nodes and links automatically assigned to risk groups based on attributes
+**Result**: `CoreTier3` holds `core1` and `core2`; `BackboneLinks` holds the link
+`core1|core2|0`; `ManualGroup1` is empty.
 
-## Example 18: Generated Risk Groups
+## Example 18: Generated risk groups
 
-Create risk groups from unique attribute values.
+A `generate` block makes one risk group per distinct value of an attribute.
 
 ```yaml
 network:
@@ -915,7 +968,7 @@ network:
         connection_type: inter_dc
 
 risk_groups:
-  # Generate risk group per datacenter (from nodes)
+  # One group per datacenter value
   - generate:
       scope: node
       group_by: datacenter
@@ -924,31 +977,31 @@ risk_groups:
         generated: true
         type: location
 
-  # Generate risk group per rack (from nodes)
+  # One group per rack value
   - generate:
       scope: node
       group_by: rack
       name: "Rack_${value}"
 
-  # Generate risk group per connection type (from links)
+  # One group per link connection_type
   - generate:
       scope: link
       group_by: connection_type
       name: "Links_${value}"
 ```
 
-**Result**: Creates 6 risk groups:
+**Result**: 6 risk groups:
 
 - `DC_dc1` (srv1, srv2)
 - `DC_dc2` (srv3)
 - `Rack_r1` (srv1, srv3)
 - `Rack_r2` (srv2)
-- `Links_intra_dc` (link srv1→srv2)
-- `Links_inter_dc` (link srv2→srv3)
+- `Links_intra_dc` (link `srv1|srv2|0`)
+- `Links_inter_dc` (link `srv2|srv3|0`)
 
-## Example 19: Additional Selector Operators
+## Example 19: Condition operators
 
-Demonstrating all condition operators.
+Demands whose sources and targets are chosen by attribute conditions.
 
 ```yaml
 network:
@@ -964,23 +1017,22 @@ network:
 
 demands:
   filtered:
-    # Tier comparison operators
+    # Comparison: tier 3 and above to tier below 2 (srv3 to srv1)
     - source:
         match:
           conditions:
             - attr: tier
               op: ">="
-              value: 2
+              value: 3
       target:
         match:
           conditions:
             - attr: tier
               op: "<"
-              value: 3
+              value: 2
       volume: 50
-      mode: pairwise
 
-    # List membership operators
+    # Lists: region east or west (srv2, srv3) to nodes tagged web (srv1)
     - source:
         match:
           conditions:
@@ -991,31 +1043,36 @@ demands:
         match:
           conditions:
             - attr: tags
-              op: contains     # List contains value
-              value: prod
+              op: contains
+              value: web
       volume: 25
-      mode: combine
 
-    # Existence operators
+    # Presence: a region that is set (srv2, srv3) to none or null (srv1, srv4)
     - source:
         match:
           conditions:
             - attr: region
-              op: exists       # Attribute exists and not null
+              op: exists
       target:
         match:
           conditions:
             - attr: region
-              op: not_exists   # Attribute missing or null
+              op: not_exists
       volume: 10
       mode: pairwise
+
+workflow:
+  - type: TrafficMatrixPlacement
+    name: filtered
+    demand_set: filtered
 ```
 
-**Result**: Demonstrates `>=`, `<`, `in`, `contains`, `exists`, `not_exists` operators
+**Result**: the operators `>=`, `<`, `in`, `contains`, `exists` and `not_exists`. The last
+demand splits its 10 over the four pairs from srv2 and srv3 to srv1 and srv4.
 
-## Example 20: link_match and Rule Expansion
+## Example 20: link_match and rule expansion
 
-Using `link_match` to filter link rules by the link's own attributes, and `expand` for variable-based rule application.
+`link_match` filters a link rule by the link's own attributes; `expand` repeats a rule.
 
 ```yaml
 network:
@@ -1028,7 +1085,7 @@ network:
     - {source: dc1_srv, target: dc2_srv, capacity: 500, cost: 1, attrs: {type: fiber}}
     - {source: dc2_srv, target: dc3_srv, capacity: 500, cost: 1, attrs: {type: copper}}
 
-  # Update only high-capacity fiber links
+  # Only high-capacity fiber links
   link_rules:
     - source: ".*"
       target: ".*"
@@ -1041,7 +1098,7 @@ network:
       attrs:
         priority: high
 
-  # Apply node rules using variable expansion
+  # One node rule per value of dc
   node_rules:
     - path: "${dc}_srv"
       expand:
@@ -1052,11 +1109,10 @@ network:
         tagged: true
 ```
 
-**Result**: Only the 500-capacity fiber link (dc1_srv -> dc2_srv) gets cost 99. Nodes dc1_srv and dc2_srv are tagged.
+**Result**: only `dc1_srv|dc2_srv|1` (capacity 500, fiber) gets cost 99. `dc1_srv` and `dc2_srv`
+get `tagged: true`.
 
-## Example 21: Nested Inline Nodes (No Blueprint)
-
-Creating hierarchical topology structure without using blueprints.
+## Example 21: Nested nodes without a blueprint
 
 ```yaml
 network:
@@ -1096,7 +1152,7 @@ network:
                 role: compute
 
   links:
-    # Connect servers to their TOR switch in each rack
+    # Each rack's servers to its top-of-rack switch
     - source:
         path: "datacenter/rack1/servers"
       target:
@@ -1109,17 +1165,20 @@ network:
         path: "datacenter/rack2/tor"
       pattern: mesh
       capacity: 25
-    # Connect TOR switches
+    # The two switches
     - source: datacenter/rack1/tor/sw1
       target: datacenter/rack2/tor/sw1
       capacity: 100
 ```
 
-**Result**: Creates 10 nodes (2 switches + 8 servers) in a two-rack hierarchy. All nodes inherit `region: west` and `tier: 1` from the datacenter parent. Each rack's nodes get the appropriate `rack_id`.
+**Result**: 10 nodes (2 switches and 8 servers, such as `datacenter/rack1/servers/srv1`) and 9
+links. Every node gets the parents' attributes: `region: west`, `tier: 1` and its rack's
+`rack_id`.
 
-## Example 22: path Filter in Generate Blocks
+## Example 22: A path filter in generate blocks
 
-Using `path` to narrow entities before generating risk groups.
+`path` narrows the nodes or links before groups are made. A link's name for `path` is
+`source|target`.
 
 ```yaml
 network:
@@ -1135,23 +1194,23 @@ network:
     - {source: dev_web1, target: dev_db1, capacity: 50, attrs: {link_type: internal}}
 
 risk_groups:
-  # Generate env-based risk groups only for production nodes
+  # Environment groups, production nodes only
   - generate:
       scope: node
-      path: "^prod_.*"
+      path: "^prod_"
       group_by: env
       name: "Env_${value}"
       attrs:
         generated: true
         critical: true
 
-  # Generate service-based risk groups for all nodes
+  # Service groups, all nodes
   - generate:
       scope: node
       group_by: service
       name: "Service_${value}"
 
-  # Generate link risk groups only for production links
+  # Link groups, production links only
   - generate:
       scope: link
       path: ".*prod.*"
@@ -1160,11 +1219,11 @@ risk_groups:
 
 demands:
   baseline:
-    - source: "^prod_web.*"
-      target: "^prod_db.*"
+    - source: "^prod_web"
+      target: "^prod_db"
       volume: 50
       mode: pairwise
-      flow_policy: SHORTEST_PATHS_ECMP
+      preset: SHORTEST_PATHS_ECMP
 
 failures:
   production_failure:
@@ -1173,16 +1232,15 @@ failures:
       - weight: 1.0
         rules:
           - scope: risk_group
-            path: "^Env_.*"
+            path: "^Env_"
             mode: choice
             count: 1
 ```
 
-**Result**: Creates the following risk groups:
+**Result**: 4 risk groups:
 
-- `Env_production` (only production nodes due to path filter)
+- `Env_production` (the three `prod_*` nodes; no `Env_development`, since the path filter
+  leaves out the dev nodes)
 - `Service_web` (prod_web1, prod_web2, dev_web1)
 - `Service_database` (prod_db1, dev_db1)
-- `ProdLinks_internal` (only production links due to path filter)
-
-Note: `Env_development` is NOT created because dev nodes don't match `^prod_.*`.
+- `ProdLinks_internal` (the two production links)
