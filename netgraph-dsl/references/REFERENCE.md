@@ -22,9 +22,17 @@ units:
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `resolution` | `auto` | The bandwidth unit `q`: `auto`, or one power of two from 2^-32 through 2^32 |
-| `precision` | `0.001` | The relative precision target; the units report states whether it is met |
+| `precision` | `0.001` | The input/count precision target `p`, greater than zero and at most 0.5 |
 
 Capacities, demand volumes, finite offers and designs and minimum unreserved bandwidth are physical amounts, converted to whole units of `q` at preparation ([Units and the resolution q](https://networmix.github.io/NetGraph/concepts/#units-and-the-resolution-q)); [Precision and the choice of q](https://networmix.github.io/NetGraph/concepts/#precision-and-the-choice-of-q) says how `q` is chosen and what the units report records. Costs are positive integers ([link keys](#direct-node-and-link-definitions)); counts and weights are integers.
+
+Conversion rounds the binary64 amount to the nearest whole unit, half up, with physical error at most `q/2`. A scaled volume is first multiplied in binary64; the conversion bound applies to that product. Preparation chooses `q` once for the run and all later library questions; analyses do not recompute the precision bounds.
+
+With `resolution: auto`, `q` is the largest legal power of two satisfying `q ≤ 2p·v_min` and `q·Γ ≤ p·c_min`. Here `v_min` is the smallest positive prepared bandwidth input, `c_min` the smallest positive link capacity, and `Γ` a static count from network nodes and links, expanded lossless equal-split leaves and tunnel counts. A bound without a positive amount is omitted. A demand set used only by simultaneous placement steps adds nothing to the count; a set named by any other workflow step or requested in `prepare(..., demand_sets=...)` counts its leaves by their declared models. The full count formula and the delivery bound's conditions are in [Precision and the choice of q](https://networmix.github.io/NetGraph/concepts/#precision-and-the-choice-of-q).
+
+If a bound needs a unit below `2^-32`, preparation starts at that floor. If converted inputs or the augmented graph's capacity sum reach `2^62` units, it chooses the finest coarser unit that fits, or refuses if none fits. Declared `resolution` sets `q` directly and is checked for range.
+
+The units report gives `limited_by` (`input`, `split_count`, `range`, `resolution_floor`, `declared` or `unbounded`), `input_bound`, `split_bound` and `range_limit`. The first two bounds have `met` flags and are null without their positive input or capacity; `range_limit` is the next finer unit's range failure only when range forced a coarser unit, otherwise null. `achieved_precision = max(q/(2·v_min), q·Γ/c_min)` over present terms, or null without a positive denominator. `target_met` says whether this scalar input/count budget is null or at most `p`; it certifies no arbitrary answer. A declared unit, the resolution floor or range limits can leave a bound unmet.
 
 YAML reads a number written with an exponent only when it has a decimal point and a signed exponent: `1.0e+6` and `1.0e-12` are numbers, while `1e6`, `1.0e6` and `1E+6` are text, and a numeric field refuses them:
 
@@ -357,7 +365,7 @@ demands: {}              # Traffic demand definitions
 failures: {}             # Failure simulation policies
 workflow: []             # Analysis execution steps
 seed: 42                 # Scenario seed for reproducibility (integer)
-units: {resolution: auto, precision: 0.001}  # Bandwidth unit q and precision target
+units: {resolution: auto, precision: 0.001}  # Bandwidth unit q and input/count target
 routes: {}               # Named explicit routes
 supports: {}             # Named forwarding supports (DAGs)
 weights: {}              # Named edge weights
@@ -379,7 +387,7 @@ forwarding_groups: {}    # Fixed group shares at programmed routers
 | `failures` | No | Failure policies for simulation |
 | `workflow` | No | Analysis workflow steps to execute |
 | `seed` | No | Scenario seed (integer) for reproducible random operations |
-| `units` | No | Bandwidth unit `q` (`resolution`, `auto` by default) and `precision` target ([Units](#units-and-input-validation)) |
+| `units` | No | Bandwidth unit `q` (`resolution`, `auto` by default) and input/count `precision` target ([Units](#units-and-input-validation)) |
 | `routes` | No | Named explicit routes for `pinned` models |
 | `supports` | No | Named forwarding supports (DAGs of directed links) |
 | `weights` | No | Named edge-weight tables |
@@ -1943,7 +1951,7 @@ Evaluates every demand of the set once per listed tunnel count, then once "up to
 
 Rows follow the set's demands, then the listed counts in order, then the `up_to` row. A row's `count` is the requested count per head (for the `up_to` row, its limit); the chosen count is `plan.tunnels_per_head`. The `plan` (fluid and whole-unit tunnel size, planned bandwidth, tunnel cost, headroom penalty, the largest lossless offer and `insufficient_resolution`) is written in every row; `result` holds what the offer delivers and loses. `lossless_at_design_units` is the lossless delivery at the design, min(design, largest lossless offer). Rows are not monotone in the count, and "up to" picks the smallest count that carries the live heads' design shares, not the count that delivers most of the offer.
 
-The example fixes `q` to 1, which misses the default precision target for these amounts ([Precision and the choice of q](https://networmix.github.io/NetGraph/concepts/#precision-and-the-choice-of-q)). In it, the pooled demand delivers 1 + 100 of its offer of 1000 with two tunnels (one per link) and its up-to row chooses one tunnel, on the wide link; the two heads deliver 2 + 10 with two tunnels each and choose one. A pool row's `plan.total_tunnel_cost` is on the analysis graph: its `pool` section's `synthetic_ingress_cost` of 1 is paid once per tunnel, which `physical_tunnel_cost` leaves out (3 and 2 here).
+The example fixes `q` to 1; its report has `limited_by: declared` and the input/count budget exceeds the default target ([Precision and the choice of q](https://networmix.github.io/NetGraph/concepts/#precision-and-the-choice-of-q)). In it, the pooled demand delivers 1 + 100 of its offer of 1000 with two tunnels (one per link) and its up-to row chooses one tunnel, on the wide link; the two heads deliver 2 + 10 with two tunnels each and choose one. A pool row's `plan.total_tunnel_cost` is on the analysis graph: its `pool` section's `synthetic_ingress_cost` of 1 is paid once per tunnel, which `physical_tunnel_cost` leaves out (3 and 2 here).
 
 The step's offer is a known lossy offer for the TE ingress pools of its set, and it and the design take part in choosing the bandwidth unit `q` ([Units and the resolution q](https://networmix.github.io/NetGraph/concepts/#units-and-the-resolution-q); [Tunnels and TE ingress pools](https://networmix.github.io/NetGraph/concepts/#tunnels-and-te-ingress-pools)). Naming the set makes it part of the run's prepared traffic like any step's set: its declared volumes and models still take part in choosing `q` and are validated at preparation.
 

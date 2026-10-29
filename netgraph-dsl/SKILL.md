@@ -81,7 +81,7 @@ All sections are optional. An unknown key is refused, anywhere in the file.
 | `failures` | Named failure policies |
 | `workflow` | The ordered analysis steps |
 | `seed` | An integer that makes random failure draws repeatable |
-| `units` | The bandwidth unit `q` and the precision target ([Units](#units-and-results)) |
+| `units` | The bandwidth unit `q` and the input/count precision target ([Units](#units-and-results)) |
 | `routes`, `supports`, `weights` | Named explicit routes, route graphs and link weights for `pinned` models |
 | `routing`, `wcmp_controller`, `forwarding_groups` | A routing domain, a WCMP controller and its fixed group shares |
 
@@ -581,18 +581,31 @@ workflow:
 ## Units and results
 
 NetGraph rounds bandwidth inputs to whole **units** of size `q`. The unit counts are exact and
-repeatable. Automatic preparation chooses a power-of-two `q` and records it as
-`units_report.q`. The precision target applies to local rounding and splitting; it can be
-missed, so check `units_report.target_met` and `units_report.misses`. Multiply bandwidth fields
-ending in `_units` by `q` for physical bandwidth. Declared inputs and `NetworkStats` capacities
-stay physical.
+repeatable. Automatic preparation chooses one power-of-two `q` from static input and count bounds and
+records it as `units_report.q`. Every placement, failure case, MSD probe and later question
+uses that same `q`. `units.precision` is greater than zero and at most 0.5 (`0.001` by default).
+See [Units and input validation](references/REFERENCE.md#units-and-input-validation) for the rule.
+
+The report's `limited_by` says what selected `q`; `input_bound` and `split_bound` describe the
+input and count bounds. `achieved_precision` is their scalar budget. `target_met` says whether
+that budget is null or at most the precision target; it does not certify the accuracy of every
+answer. The delivery bound applies only under the conditions in
+[Precision and the choice of q](https://networmix.github.io/NetGraph/concepts/#precision-and-the-choice-of-q),
+including a single directly converted request on a fixed lossless equal-split shared acyclic
+routing graph, positive original carrying capacities and the split bound being met. Ordered demands
+using residual capacity, expanded requests, scaled products, lossy or weighted routing,
+supplied programs, controllers and tunnel setup have no general bound against proportional
+splitting. Later questions do not update the bounds.
+
+Multiply bandwidth fields ending in `_units` by `q` for physical bandwidth. Declared inputs
+and `NetworkStats` capacities stay physical.
 
 The results file is one line of JSON (`jq .` indents it):
 
 ```json
 {
   "metadata": {"netgraph_version": "...", "core_version": "...", "seed": 42},
-  "units_report": {"q": 0.0078125, "target_met": true},
+  "units_report": {"q": 0.03125, "limited_by": "split_count", "target_met": true},
   "steps": [
     {"name": "placement", "step_type": "TrafficMatrixPlacement", "execution_order": 0,
      "question": {}, "result": {}}
